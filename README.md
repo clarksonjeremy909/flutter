@@ -35,7 +35,7 @@ PC tarafında `AfkScheduler` (`lib/core/afk/afk_scheduler.dart`):
 
 Windows tarafı ham `dart:ffi` ile (`lib/core/afk/windows_keep_awake_backend.dart`),
 zamanlama mantığı platformdan bağımsız ve `fake_async` ile birim testli
-(`test/afk/afk_scheduler_test.dart`, 21 test).
+(`test/afk/afk_scheduler_test.dart`, 22 test).
 
 ## Sunshine (Windows host)
 
