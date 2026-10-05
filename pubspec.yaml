@@ -1,5 +1,5 @@
 name: aktifdesk
-description: "A new Flutter project."
+description: "AktifDesk turns your Android phone or tablet into a low-latency game-streaming remote for your Windows PC, powered by Sunshine/Moonlight, with a robust AFK keep-awake mode."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

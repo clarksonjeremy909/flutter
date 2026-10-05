@@ -1,0 +1,10 @@
+# AktifDesk – Windows build notes
+#
+# * flutter_secure_storage is used for secrets on Android only. On Windows,
+#   PlatformSecretStore (lib/app/secret_store.dart) keeps secrets in
+#   SharedPreferences instead (user-profile scoped, not encrypted).
+# * The flutter_secure_storage_windows native plugin is still registered and
+#   compiled by Flutter on Windows because the package is a dependency. It
+#   includes <atlstr.h>, so the Visual Studio "C++ ATL" component must be
+#   installed (it is present on the GitHub Actions windows-2022 image).
+# * The executable is named AktifDesk.exe (BINARY_NAME in CMakeLists.txt).

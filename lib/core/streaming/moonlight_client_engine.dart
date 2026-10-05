@@ -1,30 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
+import '../../app/secret_store.dart';
 import '../gamestream/client_identity.dart';
 import '../gamestream/gamestream_client.dart';
 import '../platform/android_bridge.dart';
 import 'streaming_engine.dart';
-
-/// Key/value persistence (secure storage in the app, memory in tests).
-abstract class SecretStore {
-  Future<String?> read(String key);
-  Future<void> write(String key, String value);
-  Future<void> delete(String key);
-}
-
-class SecureSecretStore implements SecretStore {
-  const SecureSecretStore();
-  static const _s = FlutterSecureStorage();
-  @override
-  Future<String?> read(String key) => _s.read(key: key);
-  @override
-  Future<void> write(String key, String value) => _s.write(key: key, value: value);
-  @override
-  Future<void> delete(String key) => _s.delete(key: key);
-}
 
 class MemorySecretStore implements SecretStore {
   final m = <String, String>{};
@@ -47,7 +28,7 @@ class MemorySecretStore implements SecretStore {
 ///   the same Sunshine host once; AktifDesk forwards that PIN to the PC.
 class MoonlightClientEngine extends ClientStreamingEngine with EngineStatusMixin {
   MoonlightClientEngine({SecretStore? store, this.transportFactory})
-      : store = store ?? const SecureSecretStore();
+      : store = store ?? PlatformSecretStore();
 
   final SecretStore store;
   final GameStreamTransport Function(ClientIdentity id)? transportFactory;

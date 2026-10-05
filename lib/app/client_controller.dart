@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'secret_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/afk/afk_status.dart';
@@ -15,7 +15,7 @@ import '../core/streaming/webrtc_fallback_engine.dart';
 
 /// Phone-side app state.
 class ClientController extends ChangeNotifier {
-  static const _secure = FlutterSecureStorage();
+  final _secrets = PlatformSecretStore();
   late final SharedPreferences _prefs;
 
   String host = '';
@@ -48,7 +48,7 @@ class ClientController extends ChangeNotifier {
     port = _prefs.getInt('pc.port') ?? ControlProtocol.defaultPort;
     deviceName = _prefs.getString('device.name') ?? deviceName;
     keepScreenOnWithAfk = _prefs.getBool('afk.keepScreenOn') ?? true;
-    token = await _secure.read(key: 'pc.token') ?? '';
+    token = await _secrets.read('pc.token') ?? '';
     moonlightPackage = await AndroidBridge.moonlightPackage().catchError((_) => null);
     if (host.isNotEmpty && token.isNotEmpty) {
       await connect();
@@ -68,7 +68,7 @@ class ClientController extends ChangeNotifier {
     await _prefs.setString('pc.host', host);
     await _prefs.setInt('pc.port', port);
     await _prefs.setString('device.name', deviceName);
-    await _secure.write(key: 'pc.token', value: token);
+    await _secrets.write('pc.token', token);
     await connect();
   }
 

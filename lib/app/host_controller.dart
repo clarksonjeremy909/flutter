@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'secret_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/afk/afk_backend_factory.dart';
@@ -21,7 +21,7 @@ import '../core/sunshine/sunshine_host.dart';
 
 /// PC-side app state: AFK scheduler, Sunshine host management, control server.
 class HostController extends ChangeNotifier implements HostSunshineHooks {
-  static const _secure = FlutterSecureStorage();
+  final _secrets = PlatformSecretStore();
   late final SharedPreferences _prefs;
 
   final afk = AfkScheduler(backend: createPlatformKeepAwakeBackend());
@@ -49,14 +49,14 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    token = await _secure.read(key: 'control.token') ?? _newToken();
-    await _secure.write(key: 'control.token', value: token);
+    token = await _secrets.read('control.token') ?? _newToken();
+    await _secrets.write('control.token', token);
     controlPort = _prefs.getInt('control.port') ?? ControlProtocol.defaultPort;
     final settingsJson = _prefs.getString('sunshine.settings');
     sunshine = SunshineHostManager(
       configuredExePath: _prefs.getString('sunshine.exePath'),
       username: _prefs.getString('sunshine.user') ?? 'aktifdesk',
-      password: await _secure.read(key: 'sunshine.pass') ?? '',
+      password: await _secrets.read('sunshine.pass') ?? '',
       pinnedCertSha256: _prefs.getString('sunshine.certSha256'),
       onCertificatePinned: (fp) => _prefs.setString('sunshine.certSha256', fp),
       settings: settingsJson == null
@@ -85,7 +85,7 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
 
   Future<void> regenerateToken() async {
     token = _newToken();
-    await _secure.write(key: 'control.token', value: token);
+    await _secrets.write('control.token', token);
     server?.token = token;
     notifyListeners();
   }
@@ -182,7 +182,7 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
           sunshine.resetApi();
         }
         await _prefs.setString('sunshine.user', user);
-        await _secure.write(key: 'sunshine.pass', value: pass);
+        await _secrets.write('sunshine.pass', pass);
       }, ok: 'Kimlik bilgileri kaydedildi');
 
   Future<void> saveSettings(SunshineManagedSettings s) => _run(() async {
