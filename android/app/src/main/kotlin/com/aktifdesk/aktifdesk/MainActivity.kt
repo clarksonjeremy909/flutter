@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
@@ -13,6 +14,13 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val moonlightPackages = listOf("com.limelight", "com.limelight.root", "com.limelight.debug")
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    override fun onDestroy() {
+        multicastLock?.let { if (it.isHeld) it.release() }
+        multicastLock = null
+        super.onDestroy()
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -68,6 +76,24 @@ class MainActivity : FlutterActivity() {
                             else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         }
                         result.success(true)
+                    }
+                    "multicastLock" -> {
+                        val on = call.argument<Boolean>("on") ?: true
+                        try {
+                            if (on) {
+                                val wifi = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+                                val lock = multicastLock ?: wifi.createMulticastLock("aktifdesk-discovery").also {
+                                    it.setReferenceCounted(false)
+                                    multicastLock = it
+                                }
+                                if (!lock.isHeld) lock.acquire()
+                            } else {
+                                multicastLock?.let { if (it.isHeld) it.release() }
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.success(false)
+                        }
                     }
                     else -> result.notImplemented()
                 }

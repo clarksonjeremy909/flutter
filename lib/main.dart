@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 
 import 'app/client_controller.dart';
 import 'app/host_controller.dart';
-import 'ui/screens/client_screen.dart';
 import 'ui/screens/host_screen.dart';
+import 'ui/screens/phone_onboarding.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,7 +19,7 @@ Future<void> main() async {
   } else {
     final c = ClientController();
     await c.init();
-    runApp(AktifDeskApp(home: ClientScreen(c: c)));
+    runApp(AktifDeskApp(home: PhoneShell(c: c)));
   }
 }
 

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'secret_store.dart';
@@ -11,7 +10,9 @@ import '../core/afk/afk_backend_factory.dart';
 import '../core/afk/afk_scheduler.dart';
 import '../core/afk/afk_status.dart';
 import '../core/control/control_protocol.dart';
-import '../core/control/control_server.dart';
+import '../core/control/discovery.dart';
+import '../core/control/pc_control_agent.dart';
+import '../core/control/pc_link.dart';
 import '../core/streaming/streaming_engine.dart';
 import '../core/streaming/sunshine_host_engine.dart';
 import '../core/streaming/webrtc_fallback_engine.dart';
@@ -19,7 +20,9 @@ import '../core/sunshine/sunshine_api.dart';
 import '../core/sunshine/sunshine_config.dart';
 import '../core/sunshine/sunshine_host.dart';
 
-/// PC-side app state: AFK scheduler, Sunshine host management, control server.
+/// PC-side app state: AFK scheduler, Sunshine host management, and the
+/// links to paired phones (the PC finds the phone by its pairing code and
+/// connects to it — no IP addresses in the UI).
 class HostController extends ChangeNotifier implements HostSunshineHooks {
   final _secrets = PlatformSecretStore();
   late final SharedPreferences _prefs;
@@ -29,15 +32,19 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
   late final EngineSelector<HostStreamingEngine> engines;
   HostStreamingEngine? activeEngine;
   Map<String, String> skippedEngines = {};
-  ControlServer? server;
+  late final PcControlAgent agent;
+  late final PcIdentity identity;
+  final PcDiscovery discovery = PcDiscovery();
+  final links = <String, PhoneLink>{};
+  List<PairedPhone> pairedPhones = [];
+
+  PairStage pairStage = PairStage.idle;
+  String? pairMessage;
+  bool showDashboard = false;
 
   SunshineHostStatus? sunshineStatus;
   List<SunshinePendingPairing> pendingPairings = [];
   List<SunshineClientInfo> pairedClients = [];
-  List<String> localAddresses = [];
-  String token = '';
-  int controlPort = ControlProtocol.defaultPort;
-  String? serverError;
   String? lastMessage;
   bool busy = false;
   int phoneCount = 0;
@@ -49,9 +56,22 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    token = await _secrets.read('control.token') ?? _newToken();
-    await _secrets.write('control.token', token);
-    controlPort = _prefs.getInt('control.port') ?? ControlProtocol.defaultPort;
+    var pcId = _prefs.getString('pc.id');
+    if (pcId == null) {
+      pcId = randomToken(16);
+      await _prefs.setString('pc.id', pcId);
+    }
+    identity = PcIdentity(id: pcId, name: Platform.localHostname);
+    final stored = await _secrets.read('phones');
+    if (stored != null) {
+      try {
+        pairedPhones = [
+          for (final j in jsonDecode(stored) as List)
+            PairedPhone.fromJson((j as Map).cast<String, Object?>())
+        ];
+      } catch (_) {}
+    }
+    showDashboard = pairedPhones.isNotEmpty;
     final settingsJson = _prefs.getString('sunshine.settings');
     sunshine = SunshineHostManager(
       configuredExePath: _prefs.getString('sunshine.exePath'),
@@ -71,56 +91,76 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
     _afkSub = afk.statusStream.listen((_) => notifyListeners());
     final method = KeepAwakeMethod.parse(_prefs.getString('afk.method'));
     await afk.setMethod(method);
-    await _startServer();
-    unawaited(_loadAddresses());
+    agent = PcControlAgent(afk: afk, sunshine: this, hostName: Platform.localHostname)..start();
+    agent.clientCountStream.listen((n) {
+      phoneCount = n;
+      notifyListeners();
+    });
+    for (final p in pairedPhones) {
+      _startLink(p);
+    }
     unawaited(refreshSunshine());
     _poll = Timer.periodic(const Duration(seconds: 10), (_) => refreshSunshine());
   }
 
-  String _newToken() {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final r = Random.secure();
-    return List.generate(8, (_) => alphabet[r.nextInt(alphabet.length)]).join();
+  // ---------------- Phone pairing / links ----------------
+  void _startLink(PairedPhone p, {WebSocket? adopt, String? address}) {
+    final l = PhoneLink(phone: p, pc: identity, agent: agent, discovery: discovery);
+    links[p.id] = l;
+    l.changes.listen((_) => notifyListeners());
+    l.start(adopt: adopt, adoptAddress: address);
   }
 
-  Future<void> regenerateToken() async {
-    token = _newToken();
-    await _secrets.write('control.token', token);
-    server?.token = token;
-    notifyListeners();
-  }
+  Future<void> _savePhones() =>
+      _secrets.write('phones', jsonEncode([for (final p in pairedPhones) p.toJson()]));
 
-  Future<void> _startServer() async {
-    final s = ControlServer(
-      afk: afk,
-      token: token,
-      sunshine: this,
-      hostName: Platform.localHostname,
-      port: controlPort,
-    );
+  /// "Eşleştir": find the phone showing [code] on the LAN and connect.
+  Future<bool> pairWithPhone(String code) async {
+    if (pairStage == PairStage.searching || pairStage == PairStage.connecting) return false;
+    pairMessage = null;
     try {
-      await s.start();
-      s.clientCountStream.listen((n) {
-        phoneCount = n;
-        notifyListeners();
-      });
-      server = s;
-      serverError = null;
+      final r = await pairWithCode(
+        code: code,
+        pc: identity,
+        discovery: discovery,
+        onStage: (s, d) {
+          pairStage = s;
+          pairMessage = switch (s) {
+            PairStage.searching => 'Telefon aranıyor…',
+            PairStage.connecting => 'Telefon bulundu: $d — bağlanılıyor…',
+            _ => null,
+          };
+          notifyListeners();
+        },
+      );
+      final old = links.remove(r.phone.id);
+      await old?.stop();
+      pairedPhones = [...pairedPhones.where((p) => p.id != r.phone.id), r.phone];
+      await _savePhones();
+      _startLink(r.phone, adopt: r.socket, address: r.address);
+      pairStage = PairStage.success;
+      pairMessage = 'Eşleşti: ${r.phone.name}';
+      showDashboard = true;
+      notifyListeners();
+      return true;
     } catch (e) {
-      serverError = 'Kontrol sunucusu başlatılamadı (port $controlPort): $e';
+      pairStage = PairStage.failed;
+      pairMessage = '$e';
+      notifyListeners();
+      return false;
     }
   }
 
-  Future<void> _loadAddresses() async {
-    try {
-      final ifs = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      localAddresses = [
-        for (final i in ifs)
-          for (final a in i.addresses)
-            if (!a.isLoopback) a.address
-      ];
-      notifyListeners();
-    } catch (_) {}
+  Future<void> unpairPhone(String id) async {
+    await links.remove(id)?.stop();
+    pairedPhones = pairedPhones.where((p) => p.id != id).toList();
+    await _savePhones();
+    notifyListeners();
+  }
+
+  void openDashboard() {
+    showDashboard = true;
+    notifyListeners();
   }
 
   // ---------------- AFK ----------------
@@ -240,7 +280,10 @@ class HostController extends ChangeNotifier implements HostSunshineHooks {
     _shutdown = true;
     _poll?.cancel();
     await afk.dispose();
-    await server?.stop();
+    for (final l in links.values) {
+      await l.stop();
+    }
+    await agent.stop();
     await _afkSub?.cancel();
     await _sunChanges.close();
   }

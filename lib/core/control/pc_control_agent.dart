@@ -14,71 +14,50 @@ abstract class HostSunshineHooks {
   Stream<Map<String, Object?>> get changes;
 }
 
-/// Runs on the PC. Lets the phone toggle AFK mode, see its live status, and
-/// forward Moonlight pairing PINs to Sunshine.
-class ControlServer {
-  ControlServer({
-    required this.afk,
-    required this.token,
-    this.sunshine,
-    this.hostName = 'AktifDesk PC',
-    this.port = ControlProtocol.defaultPort,
-    this.address,
-  });
+/// Runs on the PC. Serves the control protocol on sockets the PC opened to
+/// phones (see `PhoneLink`): lets the phone toggle AFK mode, see its live
+/// status, and forward Moonlight pairing PINs to Sunshine.
+class PcControlAgent {
+  PcControlAgent({required this.afk, this.sunshine, this.hostName = 'AktifDesk PC'});
 
   final AfkScheduler afk;
-  String token;
   final HostSunshineHooks? sunshine;
   final String hostName;
-  final int port;
-  final InternetAddress? address;
 
-  HttpServer? _server;
   final _clients = <WebSocket, String>{};
   StreamSubscription<AfkStatus>? _afkSub;
   StreamSubscription<Map<String, Object?>>? _sunSub;
+  bool _started = false;
 
   int get connectedClients => _clients.length;
-  int? get boundPort => _server?.port;
   final _clientCount = StreamController<int>.broadcast();
   Stream<int> get clientCountStream => _clientCount.stream;
 
-  Future<void> start() async {
-    if (_server != null) return;
-    _server = await HttpServer.bind(address ?? InternetAddress.anyIPv4, port, shared: true);
-    _server!.listen(_handle, onError: (_) {});
+  void start() {
+    if (_started) return;
+    _started = true;
     _afkSub = afk.statusStream.listen(
-        (s) => _broadcast({'type': ControlProtocol.afkStatus, 'status': s.toJson()}));
+      (s) => _broadcast({'type': ControlProtocol.afkStatus, 'status': s.toJson()}),
+    );
     _sunSub = sunshine?.changes.listen(
-        (s) => _broadcast({'type': ControlProtocol.sunshineStatus, 'status': s}));
+      (s) => _broadcast({'type': ControlProtocol.sunshineStatus, 'status': s}),
+    );
   }
 
   Future<void> stop() async {
+    _started = false;
     await _afkSub?.cancel();
     await _sunSub?.cancel();
     for (final ws in _clients.keys.toList()) {
       await ws.close(WebSocketStatus.goingAway);
     }
     _clients.clear();
-    await _server?.close(force: true);
-    _server = null;
   }
 
-  Future<void> _handle(HttpRequest req) async {
-    if (req.uri.path != ControlProtocol.path ||
-        !WebSocketTransformer.isUpgradeRequest(req)) {
-      req.response.statusCode = HttpStatus.notFound;
-      await req.response.close();
-      return;
-    }
-    final given = req.headers.value(ControlProtocol.tokenHeader) ?? '';
-    if (!constantTimeEquals(given, token)) {
-      req.response.statusCode = HttpStatus.unauthorized;
-      await req.response.close();
-      return;
-    }
-    final peer = req.connectionInfo?.remoteAddress.address ?? '?';
-    final ws = await WebSocketTransformer.upgrade(req);
+  /// Serve an authenticated socket to a phone. Completes when it closes.
+  Future<void> attach(WebSocket ws, {String peer = '?'}) {
+    start();
+    final closed = Completer<void>();
     ws.pingInterval = const Duration(seconds: 10);
     _clients[ws] = peer;
     _clientCount.add(_clients.length);
@@ -89,22 +68,25 @@ class ControlServer {
     });
     _send(ws, {'type': ControlProtocol.afkStatus, 'status': afk.status.toJson()});
     if (sunshine != null) {
-      unawaited(sunshine!.status().then((s) =>
-          _send(ws, {'type': ControlProtocol.sunshineStatus, 'status': s}),
-          onError: (_) {}));
+      unawaited(
+        sunshine!.status().then(
+          (s) => _send(ws, {'type': ControlProtocol.sunshineStatus, 'status': s}),
+          onError: (_) {},
+        ),
+      );
     }
+    void done() {
+      if (_clients.remove(ws) != null) _clientCount.add(_clients.length);
+      if (!closed.isCompleted) closed.complete();
+    }
+
     ws.listen(
       (data) => _onMessage(ws, peer, data),
-      onDone: () {
-        _clients.remove(ws);
-        _clientCount.add(_clients.length);
-      },
-      onError: (_) {
-        _clients.remove(ws);
-        _clientCount.add(_clients.length);
-      },
+      onDone: done,
+      onError: (_) => done(),
       cancelOnError: true,
     );
+    return closed.future;
   }
 
   Future<void> _onMessage(WebSocket ws, String peer, Object? data) async {
@@ -116,12 +98,12 @@ class ControlServer {
     }
     final id = msg['id'];
     void reply(bool ok, [Object? error, Object? value]) => _send(ws, {
-          'type': ControlProtocol.result,
-          'id': id,
-          'ok': ok,
-          if (error != null) 'error': '$error',
-          'value': ?value,
-        });
+      'type': ControlProtocol.result,
+      'id': id,
+      'ok': ok,
+      if (error != null) 'error': '$error',
+      'value': ?value,
+    });
     try {
       switch (msg['type']) {
         case ControlProtocol.afkSet:
@@ -129,9 +111,7 @@ class ControlServer {
           if (enabled) {
             final sec = (msg['intervalSec'] as num?)?.toInt();
             await afk.enable(
-              method: msg['method'] == null
-                  ? null
-                  : KeepAwakeMethod.parse(msg['method'] as String),
+              method: msg['method'] == null ? null : KeepAwakeMethod.parse(msg['method'] as String),
               interval: sec == null ? null : Duration(seconds: sec.clamp(10, 3600)),
             );
           } else {
@@ -149,8 +129,11 @@ class ControlServer {
         case ControlProtocol.sunshinePin:
           final s = sunshine;
           if (s == null) throw StateError('Sunshine yönetimi kapalı');
-          final ok = await s.submitPin('${msg['pin']}',
-              clientName: '${msg['name'] ?? 'Telefon'}', clientAddress: peer);
+          final ok = await s.submitPin(
+            '${msg['pin']}',
+            clientName: '${msg['name'] ?? 'Telefon'}',
+            clientAddress: peer,
+          );
           reply(ok, ok ? null : 'PIN reddedildi');
         case ControlProtocol.sunshinePrepare:
           final s = sunshine;

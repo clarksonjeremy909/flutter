@@ -46,4 +46,11 @@ class AndroidBridge {
     if (!supported) return;
     await _ch.invokeMethod('keepScreenOn', {'on': on});
   }
+
+  /// Hold a Wi-Fi MulticastLock so UDP discovery broadcasts from the PC are
+  /// delivered while AktifDesk is open (some devices filter them otherwise).
+  static Future<bool> acquireMulticastLock() async {
+    if (!supported) return false;
+    return await _ch.invokeMethod<bool>('multicastLock', {'on': true}) ?? false;
+  }
 }

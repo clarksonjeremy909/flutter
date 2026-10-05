@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../app/host_controller.dart';
+import '../../core/control/pc_link.dart';
 import '../../core/sunshine/sunshine_config.dart';
 import '../../core/sunshine/sunshine_host.dart';
 import '../widgets/afk_status_card.dart';
+import '../widgets/pair_code_form.dart';
 
 class HostScreen extends StatefulWidget {
   const HostScreen({super.key, required this.c});
@@ -26,9 +27,45 @@ class _HostScreenState extends State<HostScreen> {
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: c,
-      builder: (context, _) => Scaffold(
+      builder: (context, _) => c.showDashboard ? _dashboard(context) : _pairingPage(context),
+    );
+  }
+
+  /// First run: just "Aktif Desk", the code field and "Eşleştir".
+  Widget _pairingPage(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Aktif Desk')),
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                Icon(Icons.phone_android, size: 72, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(height: 12),
+                Text('Aktif Desk',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineMedium
+                        ?.copyWith(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                const Text('Telefondaki AktifDesk uygulamasında görünen kodu gir.',
+                    textAlign: TextAlign.center),
+                const SizedBox(height: 24),
+                PairCodeForm(onPair: c.pairWithPhone, stage: c.pairStage, message: c.pairMessage),
+                const SizedBox(height: 24),
+                TextButton(
+                    onPressed: c.openDashboard,
+                    child: const Text('Eşleştirmeden devam et (Sunshine ayarları)')),
+              ]),
+            ),
+          ),
+        ),
+      );
+
+  Widget _dashboard(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: const Text('AktifDesk — PC'),
+          title: const Text('Aktif Desk'),
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 16),
@@ -73,36 +110,40 @@ class _HostScreenState extends State<HostScreen> {
             ]),
           );
         }),
-      ),
-    );
-  }
+      );
 
   Widget _phoneCard(BuildContext context) => Card(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Telefon bağlantısı', style: Theme.of(context).textTheme.titleMedium),
+            Text('Telefonlar', style: Theme.of(context).textTheme.titleMedium),
+            if (c.pairedPhones.isEmpty) const Text('Henüz eşleşmiş telefon yok.'),
+            for (final p in c.pairedPhones)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.phone_android,
+                    color: c.links[p.id]?.state == PhoneLinkState.connected ? Colors.green : Colors.grey),
+                title: Text(p.name),
+                subtitle: Text(switch (c.links[p.id]?.state) {
+                  PhoneLinkState.connected => 'Bağlı',
+                  PhoneLinkState.connecting => 'Bağlanıyor…',
+                  PhoneLinkState.rejected =>
+                    c.links[p.id]?.lastError ?? 'Telefon reddetti — yeniden eşleştirin',
+                  PhoneLinkState.stopped => 'Durdu',
+                  _ => 'Aranıyor… (telefonda AktifDesk açık olmalı)',
+                }),
+                trailing: IconButton(
+                    tooltip: 'Eşleştirmeyi kaldır',
+                    onPressed: () => c.unpairPhone(p.id),
+                    icon: const Icon(Icons.link_off)),
+              ),
+            const Divider(height: 24),
+            Text('Yeni telefon eşleştir', style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: 8),
-            if (c.serverError != null)
-              Text(c.serverError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-            SelectableText('PC adresi: ${c.localAddresses.isEmpty ? '…' : c.localAddresses.join(', ')}'),
-            SelectableText('Port: ${c.controlPort}'),
-            Row(children: [
-              SelectableText('Bağlantı kodu: ',
-                  style: Theme.of(context).textTheme.bodyLarge),
-              SelectableText(c.token,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 3)),
-              IconButton(
-                  tooltip: 'Kopyala',
-                  onPressed: () => Clipboard.setData(ClipboardData(text: c.token)),
-                  icon: const Icon(Icons.copy)),
-              IconButton(
-                  tooltip: 'Yeni kod üret',
-                  onPressed: c.regenerateToken,
-                  icon: const Icon(Icons.refresh)),
-            ]),
-            const Text('Telefondaki AktifDesk uygulamasına bu adresi ve kodu girin. '
-                'Windows Güvenlik Duvarı izin isterse "Özel ağlar" için izin verin.',
+            PairCodeForm(onPair: c.pairWithPhone, stage: c.pairStage, message: c.pairMessage),
+            const SizedBox(height: 8),
+            const Text('Telefon ve PC aynı Wi-Fi/LAN ağında olmalı. Adres girmen gerekmez; '
+                'PC, koddaki telefonu ağda kendisi bulur.',
                 style: TextStyle(fontSize: 12)),
           ]),
         ),

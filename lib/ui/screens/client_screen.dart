@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/client_controller.dart';
-import '../../core/control/control_client.dart';
-import '../../core/control/control_protocol.dart';
+import '../../core/control/phone_control_server.dart';
 import '../../core/platform/android_bridge.dart';
 import '../widgets/afk_status_card.dart';
 
@@ -23,25 +22,38 @@ class _ClientScreenState extends State<ClientScreen> {
           final connected = c.connection == ControlConnection.connected;
           return Scaffold(
             appBar: AppBar(
-              title: Text(c.control?.hostName ?? 'AktifDesk'),
+              title: Text(c.control.hostName ?? 'AktifDesk'),
               actions: [
                 _ConnChip(state: c.connection),
-                IconButton(
-                    tooltip: 'Bağlantı ayarları',
-                    onPressed: () => _editConnection(context),
-                    icon: const Icon(Icons.settings)),
+                PopupMenuButton<String>(
+                  tooltip: 'Menü',
+                  onSelected: (v) => switch (v) {
+                    'pair' => c.showPairingCode(),
+                    'name' => _editName(context),
+                    'pcs' => _managePcs(context),
+                    _ => null,
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'pair', child: Text('Yeni PC eşleştir')),
+                    PopupMenuItem(value: 'pcs', child: Text('Eşleşmiş PC\'ler')),
+                    PopupMenuItem(value: 'name', child: Text('Telefon adı')),
+                  ],
+                ),
               ],
             ),
             body: RefreshIndicator(
               onRefresh: c.refreshStream,
               child: ListView(padding: const EdgeInsets.all(12), children: [
-                if (c.host.isEmpty)
+                if (!connected)
                   Card(
                     child: ListTile(
-                      leading: const Icon(Icons.link),
-                      title: const Text('PC\'ye bağlan'),
-                      subtitle: const Text('PC uygulamasındaki adresi ve bağlantı kodunu girin'),
-                      onTap: () => _editConnection(context),
+                      leading: const SizedBox(
+                          width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                      title: const Text('PC bekleniyor'),
+                      subtitle: const Text(
+                          'PC\'de AktifDesk açık ve aynı Wi-Fi ağındaysa otomatik bağlanır.'),
+                      trailing: TextButton(
+                          onPressed: c.showPairingCode, child: const Text('Kodu göster')),
                     ),
                   ),
                 if (c.message != null)
@@ -59,7 +71,7 @@ class _ClientScreenState extends State<ClientScreen> {
                   status: c.afkStatus,
                   remote: true,
                   connected: connected,
-                  lastSyncAt: c.control?.lastMessageAt,
+                  lastSyncAt: c.control.lastMessageAt,
                   busy: c.afkBusy,
                   onToggle: c.setAfk,
                   onPingNow: c.pingAfk,
@@ -140,36 +152,50 @@ class _ClientScreenState extends State<ClientScreen> {
     );
   }
 
-  Future<void> _editConnection(BuildContext context) async {
-    final h = TextEditingController(text: c.host);
-    final p = TextEditingController(text: '${c.port}');
-    final t = TextEditingController(text: c.token);
+  Future<void> _editName(BuildContext context) async {
     final n = TextEditingController(text: c.deviceName);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('PC bağlantısı'),
-        content: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: h, decoration: const InputDecoration(labelText: 'PC adresi (ör. 192.168.1.20)')),
-            TextField(
-                controller: p,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Port')),
-            TextField(controller: t, decoration: const InputDecoration(labelText: 'Bağlantı kodu')),
-            TextField(controller: n, decoration: const InputDecoration(labelText: 'Bu cihazın adı')),
-          ]),
-        ),
+        title: const Text('Telefon adı'),
+        content: TextField(
+            controller: n,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'PC\'de görünecek ad')),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('İptal')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Bağlan')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Kaydet')),
         ],
       ),
     );
-    if (ok == true) {
-      await c.saveConnection(h.text, int.tryParse(p.text) ?? ControlProtocol.defaultPort, t.text, n.text);
-    }
+    if (ok == true) await c.setDeviceName(n.text);
   }
+
+  Future<void> _managePcs(BuildContext context) => showDialog<void>(
+        context: context,
+        builder: (ctx) => ListenableBuilder(
+          listenable: c,
+          builder: (ctx, _) => AlertDialog(
+            title: const Text('Eşleşmiş PC\'ler'),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              if (c.pairedPcs.isEmpty) const Text('—'),
+              for (final pc in c.pairedPcs)
+                ListTile(
+                  leading: Icon(Icons.computer,
+                      color: c.control.connectedPcId == pc.id ? Colors.green : null),
+                  title: Text(pc.name),
+                  trailing: IconButton(
+                      tooltip: 'Eşleştirmeyi kaldır',
+                      onPressed: () => c.forgetPc(pc.id),
+                      icon: const Icon(Icons.link_off)),
+                ),
+            ]),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Kapat')),
+            ],
+          ),
+        ),
+      );
 }
 
 class _ConnChip extends StatelessWidget {
@@ -179,9 +205,8 @@ class _ConnChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final (c, t) = switch (state) {
       ControlConnection.connected => (Colors.green, 'Bağlı'),
-      ControlConnection.connecting => (Colors.blue, 'Bağlanıyor'),
-      ControlConnection.unauthorized => (Colors.red, 'Kod hatalı'),
-      ControlConnection.disconnected => (Colors.grey, 'Bağlı değil'),
+      ControlConnection.waiting => (Colors.blue, 'PC bekleniyor'),
+      ControlConnection.stopped => (Colors.grey, 'Kapalı'),
     };
     return Chip(avatar: CircleAvatar(backgroundColor: c, radius: 6), label: Text(t));
   }
