@@ -1,3 +1,15 @@
+# ⚠️ Moved
+
+**AktifDesk has moved to a new repository:**
+
+# → https://github.com/k516crypro/aktifdesk
+
+Releases (Android APK + Windows exe): https://github.com/k516crypro/aktifdesk/releases/latest
+
+This repository (`clarksonjeremy909/flutter`) is **archived / inactive**. GitHub Actions here are billing-locked and will not build. Please use the new repo for downloads, issues, and PRs.
+
+---
+
 # AktifDesk
 
 [![Build](https://github.com/clarksonjeremy909/flutter/actions/workflows/build.yml/badge.svg)](https://github.com/clarksonjeremy909/flutter/actions/workflows/build.yml)
