@@ -46,3 +46,11 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# AktifDesk: never commit build outputs or packaged binaries
+build/
+**/build/
+*.apk
+*.aab
+*.zip
+*.exe
