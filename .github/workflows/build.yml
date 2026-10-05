@@ -1,3 +1,6 @@
+# NOTE: On clarksonjeremy909, GitHub-hosted runners currently fail to assign
+# (jobs finish in ~1–4s with empty runner_name / steps=0). Until that is fixed,
+# build Windows locally with scripts/build-windows.ps1 and upload the zip to the Release.
 name: Build
 
 on:

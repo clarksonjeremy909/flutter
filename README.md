@@ -94,11 +94,9 @@ Code map:
 
 Grab the latest build from **[GitHub Releases](https://github.com/clarksonjeremy909/flutter/releases/latest)**:
 
-- `AktifDesk-windows-x64.zip` — Windows host (unzip anywhere and run `AktifDesk.exe`)
 - `AktifDesk-android.apk` — Android client (universal APK: arm64-v8a, armeabi-v7a, x86_64)
 - `AktifDesk-android-arm64-v8a.apk` / `-armeabi-v7a.apk` / `-x86_64.apk` — smaller per-ABI APKs (most phones: `arm64-v8a`)
-
-Every push to `main` also produces downloadable artifacts in [GitHub Actions](https://github.com/clarksonjeremy909/flutter/actions).
+- **`AktifDesk-windows-x64.zip` — not attached yet.** GitHub-hosted Actions runners on this account fail to start (jobs complete in ~1–4 s with no runner assigned), so the Windows MSVC build cannot be produced from Linux CI. Build it locally on any Windows PC with Flutter — see [Building the Windows exe](#building-the-windows-exe) below — then upload the zip to the release.
 
 > The APK is currently signed with a debug key. Android will ask you to allow installation from unknown sources.
 
@@ -138,13 +136,47 @@ flutter test                     # 55 tests: AFK scheduler, GameStream pairing, 
 
 flutter build apk --release      # Android  -> build/app/outputs/flutter-apk/app-release.apk
 flutter build apk --release --split-per-abi   # per-ABI APKs (app-arm64-v8a-release.apk, …)
-flutter config --enable-windows-desktop
-flutter build windows --release  # Windows  -> build/windows/x64/runner/Release/AktifDesk.exe
 ```
 
 You can run the host UI on a non-Windows desktop for development with `--dart-define=AKTIFDESK_HOST=true` (Windows-only calls are no-ops there).
 
-CI (`.github/workflows/build.yml`) builds both targets on every push to `main`; pushing a `v*` tag publishes a GitHub Release with both binaries attached.
+### Building the Windows exe
+
+Flutter's Windows target needs the **MSVC** toolchain (Visual Studio). It **cannot** be cross-compiled on Linux (Wine / MinGW are not supported). Use a real Windows machine:
+
+1. Install [Flutter stable for Windows](https://docs.flutter.dev/get-started/install/windows) and add it to `PATH`.
+2. Install **Visual Studio 2022** (Community is fine) with workload **Desktop development with C++**, plus component **C++ ATL for latest v143 build tools (x86 & x64)**.
+3. Clone and build (one-liner script):
+
+```powershell
+git clone https://github.com/clarksonjeremy909/flutter.git aktifdesk
+cd aktifdesk
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows.ps1
+```
+
+Or the same steps by hand:
+
+```powershell
+flutter config --enable-windows-desktop
+flutter pub get
+flutter build windows --release
+# Binary folder:
+#   build\windows\x64\runner\Release\AktifDesk.exe
+Compress-Archive -Path .\build\windows\x64\runner\Release\* `
+  -DestinationPath .\AktifDesk-windows-x64.zip -Force
+```
+
+4. Attach the zip to the release (replace the tag if you publish a newer one):
+
+```powershell
+gh release upload v1.1.0 .\AktifDesk-windows-x64.zip --repo clarksonjeremy909/flutter --clobber
+```
+
+`scripts/build-windows.cmd` is a double-click wrapper around the PowerShell script.
+
+### CI note
+
+`.github/workflows/build.yml` is set up for Windows + Android + Release on `push` / `workflow_dispatch` / `v*` tags. On this GitHub account, hosted runners currently **never start** (jobs fail in ~1–4 s with `runner_name` empty and `steps=0`, billable ms = 0). Until that is fixed in GitHub account/Actions settings, produce the Windows zip locally as above.
 
 ---
 
@@ -152,7 +184,7 @@ CI (`.github/workflows/build.yml`) builds both targets on every push to `main`; 
 
 Being honest about where v1.1.0 stands:
 
-- **Windows-only code paths have not been tested on real hardware yet.** The `SetThreadExecutionState` / `SendInput` FFI calls, Sunshine service control (`sc`, `tasklist`, `taskkill`) and the Windows build are compiled in CI and covered by unit tests with fakes, but have not been exercised end-to-end on a physical Windows PC.
+- **Windows-only code paths have not been tested on real hardware yet.** The `SetThreadExecutionState` / `SendInput` FFI calls and Sunshine service control (`sc`, `tasklist`, `taskkill`) are covered by unit tests with fakes. A Windows release zip is **not** on GitHub Releases yet (hosted Actions runners do not start on this account); build it locally — see [Building the Windows exe](#building-the-windows-exe).
 - **Anti-cheat may block virtual input.** Some games/anti-cheat systems ignore or flag `SendInput` events and virtual devices. Use at your own risk and respect each game's terms of service.
 - **AFK is not guaranteed.** Games with their own server-side or input-pattern AFK detection may still kick you; the AFK engine only resets the OS/game idle timers that react to local input.
 - **Video decode is handed to the installed Moonlight app.** AktifDesk does not yet render the stream itself, so the in-app player features (side menu, FPS selector, editable virtual controls) are on the roadmap.
